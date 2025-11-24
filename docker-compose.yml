@@ -1,0 +1,18 @@
+  dispatcher:
+    build:
+      context: .
+      dockerfile: dispatcher/Dockerfile
+    image: luxia/dispatcher:latest
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      POSTS_TOPIC: posts.inbound
+      JOBS_TOPIC: jobs.to_worker
+      DLQ_TOPIC: jobs.failed
+      DISPATCHER_GROUP: dispatcher-posts
+      PROM_PORT: 9600
+    depends_on:
+      - kafka
+    ports:
+      - "9110:9110"   # http api
+      - "9600:9600"   # prometheus metrics
