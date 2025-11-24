@@ -8,7 +8,13 @@ from prometheus_client import start_http_server
 
 from app.consumers.kafka import KafkaPostConsumer
 from app.publishers.kafka import KafkaPublisher
-from app.utils.config import GROUP_ID, KAFKA_BOOTSTRAP, LOG_LEVEL, POSTS_TOPIC, PROM_PORT
+from app.utils.config import (
+    GROUP_ID,
+    KAFKA_BOOTSTRAP,
+    LOG_LEVEL,
+    POSTS_TOPIC,
+    PROM_PORT,
+)
 
 logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger("dispatcher")

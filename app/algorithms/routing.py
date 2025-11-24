@@ -2,7 +2,12 @@ import logging
 
 from groq import Groq
 
-from app.utils.config import AVAILABLE_DOMAINS, DOMAIN_TO_WORKER_GROUP, GROQ_API_KEY, GROQ_MODEL
+from app.utils.config import (
+    AVAILABLE_DOMAINS,
+    DOMAIN_TO_WORKER_GROUP,
+    GROQ_API_KEY,
+    GROQ_MODEL,
+)
 from app.utils.schemas import PostEnvelope
 
 logger = logging.getLogger(__name__)
