@@ -37,22 +37,49 @@ run_check() {
 }
 
 # Use 'read' to get user input for which checks to run
-read -p "Enter the checks you want to run (e.g., 'pytest ruff black isort flake8 bandit mypy', or 'all' for all checks): " input_checks
+if [[ "$1" == "--fix" ]]; then
+    fix_mode=true
+    shift
+else
+    fix_mode=false
+fi
+
+if [[ -n "$1" ]]; then
+    input_checks="$1"
+else
+    read -p "Enter the checks you want to run (e.g., 'pytest ruff black isort flake8 bandit mypy', or 'all' for all checks): " input_checks
+fi
 
 # An associative array to map check names to their commands
 declare -A checks
-checks[ruff]="ruff check . && ruff . --fix --exit-zero"
-checks[black]="black --check app tests"
-checks[isort]="isort --check-only app tests"
-checks[flake8]="flake8 app tests"
-checks[bandit]="bandit -r app -c .bandit"
-checks[pytest]="pytest -q --disable-warnings"
-checks[mypy]="mypy app"
+if $fix_mode; then
+    checks[ruff]="ruff check . && ruff . --fix"
+    checks[black]="black app tests"
+    checks[isort]="isort app tests"
+    checks[flake8]="flake8 app tests"  # flake8 doesn't have fix
+    checks[bandit]="bandit -r app -c .bandit"  # bandit doesn't have fix
+    checks[pytest]="pytest -q --disable-warnings"  # pytest is run, not fix
+    checks[mypy]="mypy app"  # mypy doesn't fix
+else
+    checks[ruff]="ruff check . && ruff . --fix --exit-zero"
+    checks[black]="black --check app tests"
+    checks[isort]="isort --check-only app tests"
+    checks[flake8]="flake8 app tests"
+    checks[bandit]="bandit -r app -c .bandit"
+    checks[pytest]="pytest -q --disable-warnings"
+    checks[mypy]="mypy app"
+fi
 
 # If the user enters 'all', use all available checks. Otherwise, parse their input.
 if [[ "$input_checks" == "all" || "$input_checks" == "" ]]; then
-    run_all=true
-    checks_to_run=("${!checks[@]}")
+    if $fix_mode && [[ "$input_checks" == "" ]]; then
+        # If fix mode and no input, default to all fixable checks
+        run_all=true
+        checks_to_run=("ruff" "black" "isort")
+    else
+        run_all=true
+        checks_to_run=("${!checks[@]}")
+    fi
 else
     run_all=false
     checks_to_run=($input_checks)

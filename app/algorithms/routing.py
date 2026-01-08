@@ -38,7 +38,7 @@ async def _call_ollama(prompt: str) -> str:
                     "model": OLLAMA_MODEL,
                     "prompt": prompt,
                     "stream": False,
-                }
+                },
             )
             if response.status_code == 200:
                 result = response.json()
