@@ -1,8 +1,8 @@
 import logging
 import os
 
-from groq import Groq
 import httpx
+from groq import Groq
 
 from app.utils.config import (
     AVAILABLE_DOMAINS,
@@ -80,7 +80,7 @@ Text: {text}"""
                 return "general"
     except Exception as e:
         logger.warning(f"Groq call failed: {e}, falling back to Ollama")
-    
+
     # Fallback to Ollama
     domain = await _call_ollama(prompt)
     if domain in AVAILABLE_DOMAINS:
