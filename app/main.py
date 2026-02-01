@@ -14,6 +14,7 @@ from app.utils.config import (
     LOG_LEVEL,
     POSTS_TOPIC,
     PROM_PORT,
+    get_kafka_config,
 )
 
 logging.basicConfig(level=LOG_LEVEL)
@@ -33,16 +34,19 @@ async def startup():
     start_http_server(PROM_PORT)
     logger.info("Prometheus running on %s", PROM_PORT)
 
-    producer = AIOKafkaProducer(bootstrap_servers=KAFKA_BOOTSTRAP)
+    kafka_config = get_kafka_config()
+
+    producer = AIOKafkaProducer(**kafka_config)
     consumer = AIOKafkaConsumer(
         POSTS_TOPIC,
-        bootstrap_servers=KAFKA_BOOTSTRAP,
+        **kafka_config,
         group_id=GROUP_ID,
         auto_offset_reset="earliest",
     )
 
     await producer.start()
     await consumer.start()
+    logger.info("Kafka connected (bootstrap=%s)", KAFKA_BOOTSTRAP)
 
     publisher = KafkaPublisher(producer)
     handler = KafkaPostConsumer(consumer, publisher)
