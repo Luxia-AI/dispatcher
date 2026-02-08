@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from app.algorithms.build_job import build_worker_job
 from app.publishers.kafka import KafkaPublisher
 from app.utils.config import POSTS_TOPIC
-from app.utils.metrics import jobs_received
+from app.utils.metrics import jobs_received, jobs_received_by_domain
 from app.utils.schemas import PostEnvelope
 
 logger = logging.getLogger("dispatcher")
@@ -38,6 +38,8 @@ class KafkaPostConsumer:
                 continue
 
             job = await build_worker_job(post)
+            routed_domain = job.assigned_worker_group.replace("-workers", "")
+            jobs_received_by_domain.labels(domain=routed_domain).inc()
             await self.publisher.publish_job(job.dict())
 
             logger.info("Dispatched job %s for post %s", job.job_id, post.post_id)

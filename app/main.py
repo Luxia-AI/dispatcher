@@ -16,11 +16,13 @@ from app.utils.config import (
     PROM_PORT,
     get_kafka_config,
 )
+from app.utils.observability import setup_tracing
 
 logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger("dispatcher")
 
 app = FastAPI(title="Dispatcher Service")
+setup_tracing(app)
 
 consumer: AIOKafkaConsumer = None
 producer: AIOKafkaProducer = None
