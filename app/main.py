@@ -1,74 +1,38 @@
-import asyncio
-import contextlib
-import logging
+﻿import os
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from fastapi import FastAPI
-from prometheus_client import start_http_server
+from prometheus_client import Counter
 
-from app.consumers.kafka import KafkaPostConsumer
-from app.publishers.kafka import KafkaPublisher
-from app.utils.config import (
-    GROUP_ID,
-    KAFKA_BOOTSTRAP,
-    LOG_LEVEL,
-    POSTS_TOPIC,
-    PROM_PORT,
-    get_kafka_config,
+from shared.metrics import install_metrics
+
+SERVICE_NAME = "dispatcher"
+SERVICE_VERSION = os.getenv("SERVICE_VERSION", "1.0.0")
+SERVICE_ENV = os.getenv("APP_ENV", "prod")
+
+dispatcher_jobs_dispatched_total = Counter(
+    "dispatcher_jobs_dispatched_total",
+    "Total jobs dispatched",
 )
-from app.utils.observability import setup_tracing
 
-logging.basicConfig(level=LOG_LEVEL)
-logger = logging.getLogger("dispatcher")
-
-app = FastAPI(title="Dispatcher Service")
-setup_tracing(app)
-
-consumer: AIOKafkaConsumer = None
-producer: AIOKafkaProducer = None
-dispatch_task = None
+app = FastAPI(title="Luxia Dispatcher", version=SERVICE_VERSION)
+install_metrics(app, service_name=SERVICE_NAME, version=SERVICE_VERSION, env=SERVICE_ENV)
 
 
-@app.on_event("startup")
-async def startup():
-    global consumer, producer, dispatch_task
-
-    start_http_server(PROM_PORT)
-    logger.info("Prometheus running on %s", PROM_PORT)
-
-    kafka_config = get_kafka_config()
-
-    producer = AIOKafkaProducer(**kafka_config)
-    consumer = AIOKafkaConsumer(
-        POSTS_TOPIC,
-        **kafka_config,
-        group_id=GROUP_ID,
-        auto_offset_reset="earliest",
-    )
-
-    await producer.start()
-    await consumer.start()
-    logger.info("Kafka connected (bootstrap=%s)", KAFKA_BOOTSTRAP)
-
-    publisher = KafkaPublisher(producer)
-    handler = KafkaPostConsumer(consumer, publisher)
-
-    dispatch_task = asyncio.create_task(handler.start_loop())
-    logger.info("Dispatcher started.")
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok", "service": SERVICE_NAME}
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    dispatch_task.cancel()
-    with contextlib.suppress(BaseException):
-        await dispatch_task
-
-    await consumer.stop()
-    await producer.stop()
-
-    logger.info("Dispatcher shut down cleanly.")
+@app.get("/dispatch/test")
+async def dispatch_test() -> dict[str, object]:
+    dispatcher_jobs_dispatched_total.inc()
+    return {
+        "status": "ok",
+        "service": SERVICE_NAME,
+        "message": "dispatch counter incremented",
+    }
 
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+@app.get("/")
+async def root() -> dict[str, str]:
+    return {"service": SERVICE_NAME, "status": "running"}
