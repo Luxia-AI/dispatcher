@@ -10,7 +10,7 @@ SERVICE_NAME = "dispatcher"
 SERVICE_VERSION = os.getenv("SERVICE_VERSION", "1.0.0")
 SERVICE_ENV = os.getenv("APP_ENV", "prod")
 WORKER_URL = os.getenv("WORKER_URL", "http://127.0.0.1:8002")
-WORKER_TIMEOUT_SECONDS = float(os.getenv("WORKER_TIMEOUT_SECONDS", "90"))
+WORKER_TIMEOUT_SECONDS = float(os.getenv("WORKER_TIMEOUT_SECONDS", "180"))
 
 dispatcher_jobs_dispatched_total = Counter(
     "dispatcher_jobs_dispatched_total",
