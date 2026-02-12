@@ -27,6 +27,16 @@ WORKER_READ_TIMEOUT_SECONDS = max(WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_MIN_SEC
 ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "false").strip().lower() in {"1", "true", "yes", "on"}
 KAFKA_RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "jobs.results")
 KAFKA_CONSUMER_GROUP = os.getenv("DISPATCHER_GROUP", "dispatcher-posts")
+KAFKA_RESULTS_PUBLISH_ATTEMPTS = max(
+    1, int(os.getenv("KAFKA_RESULTS_PUBLISH_ATTEMPTS", "3"))
+)
+KAFKA_RESULTS_PUBLISH_BACKOFF_SECONDS = max(
+    0.0, float(os.getenv("KAFKA_RESULTS_PUBLISH_BACKOFF_SECONDS", "1.0"))
+)
+SOCKETHUB_RESULT_CALLBACK_URL = os.getenv("SOCKETHUB_RESULT_CALLBACK_URL", "").strip()
+SOCKETHUB_RESULT_CALLBACK_TOKEN = os.getenv(
+    "SOCKETHUB_RESULT_CALLBACK_TOKEN", ""
+).strip()
 
 logger = logging.getLogger(__name__)
 _kafka_consumer: AIOKafkaConsumer | None = None
@@ -129,6 +139,7 @@ async def _kafka_loop() -> None:
         return
     logger.info("[Dispatcher] Kafka consume loop started topic=%s group=%s", POSTS_TOPIC, KAFKA_CONSUMER_GROUP)
     async for msg in _kafka_consumer:
+        raw: dict[str, object] | None = None
         try:
             raw = json.loads(msg.value.decode("utf-8"))
             payload = DispatchRequest(
@@ -155,14 +166,19 @@ async def _kafka_loop() -> None:
                     "room_id": payload.room_id,
                     "message": "Invalid worker response payload",
                 }
-            await _kafka_producer.send_and_wait(KAFKA_RESULTS_TOPIC, json.dumps(out).encode("utf-8"))
-            logger.info(
-                "[Dispatcher][Kafka] result publish ok topic=%s room_id=%s job_id=%s status=%s",
-                KAFKA_RESULTS_TOPIC,
-                str(payload.room_id or ""),
-                payload.job_id,
-                str(out.get("status") if isinstance(out, dict) else ""),
+            published = await _publish_result_with_retry(
+                out, payload.room_id, payload.job_id
             )
+            if not published:
+                fallback_ok = await _emit_result_fallback(
+                    out, payload.room_id, payload.job_id
+                )
+                if not fallback_ok:
+                    logger.error(
+                        "[Dispatcher] Worker completed but result delivery failed room_id=%s job_id=%s",
+                        str(payload.room_id or ""),
+                        payload.job_id,
+                    )
         except Exception as exc:
             err_payload = {
                 "status": "error",
@@ -170,9 +186,139 @@ async def _kafka_loop() -> None:
                 "room_id": raw.get("room_id") if isinstance(raw, dict) else None,
                 "message": f"Kafka dispatch failed: {type(exc).__name__}: {exc}",
             }
-            with contextlib.suppress(Exception):
-                await _kafka_producer.send_and_wait(KAFKA_RESULTS_TOPIC, json.dumps(err_payload).encode("utf-8"))
+            if not (
+                await _publish_result_with_retry(
+                    err_payload,
+                    err_payload.get("room_id"),
+                    err_payload.get("job_id"),
+                )
+            ):
+                await _emit_result_fallback(
+                    err_payload,
+                    err_payload.get("room_id"),
+                    err_payload.get("job_id"),
+                )
             logger.exception("[Dispatcher] Kafka consume/dispatch failure")
+
+
+async def _publish_result_with_retry(
+    result_payload: dict[str, object],
+    room_id: object,
+    job_id: object,
+) -> bool:
+    if _kafka_producer is None:
+        logger.warning("[Dispatcher][Kafka] result publish skipped: producer unavailable")
+        return False
+
+    encoded = json.dumps(result_payload).encode("utf-8")
+    for attempt in range(1, KAFKA_RESULTS_PUBLISH_ATTEMPTS + 1):
+        try:
+            await _kafka_producer.send_and_wait(KAFKA_RESULTS_TOPIC, encoded)
+            logger.info(
+                "[Dispatcher][Kafka] result publish ok topic=%s room_id=%s job_id=%s status=%s attempt=%d/%d",
+                KAFKA_RESULTS_TOPIC,
+                str(room_id or ""),
+                str(job_id or ""),
+                str(result_payload.get("status") or ""),
+                attempt,
+                KAFKA_RESULTS_PUBLISH_ATTEMPTS,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "[Dispatcher][Kafka] result publish failed topic=%s room_id=%s job_id=%s attempt=%d/%d error=%s",
+                KAFKA_RESULTS_TOPIC,
+                str(room_id or ""),
+                str(job_id or ""),
+                attempt,
+                KAFKA_RESULTS_PUBLISH_ATTEMPTS,
+                exc,
+            )
+            if attempt < KAFKA_RESULTS_PUBLISH_ATTEMPTS:
+                await asyncio.sleep(
+                    KAFKA_RESULTS_PUBLISH_BACKOFF_SECONDS * attempt
+                )
+    return False
+
+
+async def _emit_result_fallback(
+    result_payload: dict[str, object],
+    room_id: object,
+    job_id: object,
+) -> bool:
+    if not SOCKETHUB_RESULT_CALLBACK_URL:
+        logger.warning(
+            "[Dispatcher][Fallback] skipped callback room_id=%s job_id=%s reason=SOCKETHUB_RESULT_CALLBACK_URL not set",
+            str(room_id or ""),
+            str(job_id or ""),
+        )
+        return False
+
+    callback_headers = {}
+    if SOCKETHUB_RESULT_CALLBACK_TOKEN:
+        callback_headers["x-dispatcher-token"] = SOCKETHUB_RESULT_CALLBACK_TOKEN
+
+    try:
+        timeout = httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                SOCKETHUB_RESULT_CALLBACK_URL,
+                json=result_payload,
+                headers=callback_headers,
+            )
+            response.raise_for_status()
+        logger.info(
+            "[Dispatcher][Fallback] callback ok room_id=%s job_id=%s status=%s",
+            str(room_id or ""),
+            str(job_id or ""),
+            str(result_payload.get("status") or ""),
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "[Dispatcher][Fallback] callback failed room_id=%s job_id=%s error=%s",
+            str(room_id or ""),
+            str(job_id or ""),
+            exc,
+        )
+        return False
+
+
+def _validate_kafka_runtime_config() -> None:
+    cfg = get_kafka_config()
+    bootstrap = str(cfg.get("bootstrap_servers", ""))
+    request_timeout_ms = int(cfg.get("request_timeout_ms", 0))
+    retries = int(cfg.get("retries", 0))
+    retry_backoff_ms = int(cfg.get("retry_backoff_ms", 0))
+    security_protocol = str(cfg.get("security_protocol", "PLAINTEXT"))
+    using_event_hubs = "servicebus.windows.net" in bootstrap.lower()
+
+    logger.info(
+        "[Dispatcher][KafkaConfig] bootstrap=%s security_protocol=%s request_timeout_ms=%d retries=%d retry_backoff_ms=%d",
+        bootstrap,
+        security_protocol,
+        request_timeout_ms,
+        retries,
+        retry_backoff_ms,
+    )
+    if using_event_hubs and security_protocol != "SASL_SSL":
+        logger.warning(
+            "[Dispatcher][KafkaConfig] Event Hubs bootstrap detected but security protocol is not SASL_SSL"
+        )
+    if using_event_hubs and ":9093" not in bootstrap:
+        logger.warning(
+            "[Dispatcher][KafkaConfig] Event Hubs bootstrap should usually include :9093"
+        )
+    if request_timeout_ms < 60000:
+        logger.warning(
+            "[Dispatcher][KafkaConfig] request_timeout_ms=%d may be too low for Event Hubs latency spikes",
+            request_timeout_ms,
+        )
+    if retries < 3:
+        logger.warning(
+            "[Dispatcher][KafkaConfig] retries=%d may be too low for transient broker timeouts",
+            retries,
+        )
 
 
 @app.on_event("startup")
@@ -181,6 +327,7 @@ async def startup_kafka() -> None:
     if not ENABLE_KAFKA:
         logger.info("[Dispatcher] Kafka loop disabled (ENABLE_KAFKA=false)")
         return
+    _validate_kafka_runtime_config()
     cfg = get_kafka_config()
     _kafka_consumer = AIOKafkaConsumer(
         POSTS_TOPIC,

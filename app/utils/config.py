@@ -33,6 +33,22 @@ class Settings(BaseSettings):
         default="",
         description="Kafka SASL password (connection string for Azure Event Hubs)",
     )
+    kafka_request_timeout_ms: int = Field(
+        default=90000,
+        description="Kafka request timeout in milliseconds",
+    )
+    kafka_retry_backoff_ms: int = Field(
+        default=1000,
+        description="Kafka retry backoff in milliseconds",
+    )
+    kafka_retries: int = Field(
+        default=8,
+        description="Kafka producer retries",
+    )
+    kafka_connections_max_idle_ms: int = Field(
+        default=180000,
+        description="Kafka max idle connection time in milliseconds",
+    )
     posts_topic: str = Field(
         default="posts.inbound",
         description="Topic for inbound posts",
@@ -111,6 +127,10 @@ KAFKA_SECURITY_PROTOCOL = settings.kafka_security_protocol
 KAFKA_SASL_MECHANISM = settings.kafka_sasl_mechanism
 KAFKA_SASL_USERNAME = settings.kafka_sasl_username
 KAFKA_SASL_PASSWORD = settings.kafka_sasl_password
+KAFKA_REQUEST_TIMEOUT_MS = settings.kafka_request_timeout_ms
+KAFKA_RETRY_BACKOFF_MS = settings.kafka_retry_backoff_ms
+KAFKA_RETRIES = settings.kafka_retries
+KAFKA_CONNECTIONS_MAX_IDLE_MS = settings.kafka_connections_max_idle_ms
 POSTS_TOPIC = settings.posts_topic
 JOBS_TOPIC = settings.jobs_topic
 DLQ_TOPIC = settings.dlq_topic
@@ -129,6 +149,10 @@ def get_kafka_config() -> dict:
 
     config = {
         "bootstrap_servers": KAFKA_BOOTSTRAP,
+        "request_timeout_ms": KAFKA_REQUEST_TIMEOUT_MS,
+        "retry_backoff_ms": KAFKA_RETRY_BACKOFF_MS,
+        "retries": KAFKA_RETRIES,
+        "connections_max_idle_ms": KAFKA_CONNECTIONS_MAX_IDLE_MS,
     }
 
     # Azure Event Hubs requires SASL_SSL
