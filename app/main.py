@@ -346,12 +346,15 @@ async def startup_kafka() -> None:
             "[Dispatcher][Fallback] callback disabled; set SOCKETHUB_URL or SOCKETHUB_RESULT_CALLBACK_URL for non-Kafka delivery fallback"
         )
     cfg = get_kafka_config()
+    consumer_cfg = dict(cfg)
+    # Producer-only option; AIOKafkaConsumer rejects it.
+    consumer_cfg.pop("retries", None)
     _kafka_consumer = AIOKafkaConsumer(
         POSTS_TOPIC,
         group_id=KAFKA_CONSUMER_GROUP,
         enable_auto_commit=True,
         auto_offset_reset="latest",
-        **cfg,
+        **consumer_cfg,
     )
     _kafka_producer = AIOKafkaProducer(**cfg)
     await _kafka_consumer.start()
