@@ -33,7 +33,15 @@ KAFKA_RESULTS_PUBLISH_ATTEMPTS = max(
 KAFKA_RESULTS_PUBLISH_BACKOFF_SECONDS = max(
     0.0, float(os.getenv("KAFKA_RESULTS_PUBLISH_BACKOFF_SECONDS", "1.0"))
 )
-SOCKETHUB_RESULT_CALLBACK_URL = os.getenv("SOCKETHUB_RESULT_CALLBACK_URL", "").strip()
+SOCKETHUB_BASE_URL = os.getenv("SOCKETHUB_URL", "").strip().rstrip("/")
+SOCKETHUB_RESULT_CALLBACK_URL = os.getenv(
+    "SOCKETHUB_RESULT_CALLBACK_URL",
+    (
+        f"{SOCKETHUB_BASE_URL}/internal/dispatch-result"
+        if SOCKETHUB_BASE_URL
+        else ""
+    ),
+).strip()
 SOCKETHUB_RESULT_CALLBACK_TOKEN = os.getenv(
     "SOCKETHUB_RESULT_CALLBACK_TOKEN", ""
 ).strip()
@@ -328,6 +336,15 @@ async def startup_kafka() -> None:
         logger.info("[Dispatcher] Kafka loop disabled (ENABLE_KAFKA=false)")
         return
     _validate_kafka_runtime_config()
+    if SOCKETHUB_RESULT_CALLBACK_URL:
+        logger.info(
+            "[Dispatcher][Fallback] callback enabled url=%s",
+            SOCKETHUB_RESULT_CALLBACK_URL,
+        )
+    else:
+        logger.warning(
+            "[Dispatcher][Fallback] callback disabled; set SOCKETHUB_URL or SOCKETHUB_RESULT_CALLBACK_URL for non-Kafka delivery fallback"
+        )
     cfg = get_kafka_config()
     _kafka_consumer = AIOKafkaConsumer(
         POSTS_TOPIC,
@@ -339,6 +356,30 @@ async def startup_kafka() -> None:
     _kafka_producer = AIOKafkaProducer(**cfg)
     await _kafka_consumer.start()
     await _kafka_producer.start()
+    with contextlib.suppress(Exception):
+        post_partitions = _kafka_consumer.partitions_for_topic(POSTS_TOPIC)
+        logger.info(
+            "[Dispatcher][KafkaConfig] topic=%s partitions=%s",
+            POSTS_TOPIC,
+            sorted(post_partitions) if post_partitions else [],
+        )
+    try:
+        results_partitions = await _kafka_producer.partitions_for(KAFKA_RESULTS_TOPIC)
+        logger.info(
+            "[Dispatcher][KafkaConfig] results_topic=%s partitions=%s",
+            KAFKA_RESULTS_TOPIC,
+            sorted(results_partitions) if results_partitions else [],
+        )
+        if not results_partitions:
+            logger.warning(
+                "[Dispatcher][KafkaConfig] results topic has no visible partitions; check Event Hubs topic/entity and permissions"
+            )
+    except Exception as exc:
+        logger.warning(
+            "[Dispatcher][KafkaConfig] unable to validate results topic metadata topic=%s error=%s",
+            KAFKA_RESULTS_TOPIC,
+            exc,
+        )
     _kafka_task = asyncio.create_task(_kafka_loop())
     logger.info("[Dispatcher] Kafka enabled topic_in=%s topic_out=%s", POSTS_TOPIC, KAFKA_RESULTS_TOPIC)
 
