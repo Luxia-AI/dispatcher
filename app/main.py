@@ -124,8 +124,9 @@ async def root() -> dict[str, str]:
 
 
 async def _kafka_loop() -> None:
-    assert _kafka_consumer is not None
-    assert _kafka_producer is not None
+    if _kafka_consumer is None or _kafka_producer is None:
+        logger.warning("[Dispatcher] Kafka loop started without consumer/producer")
+        return
     logger.info("[Dispatcher] Kafka consume loop started topic=%s group=%s", POSTS_TOPIC, KAFKA_CONSUMER_GROUP)
     async for msg in _kafka_consumer:
         try:
@@ -135,6 +136,12 @@ async def _kafka_loop() -> None:
                 claim=str(raw.get("claim") or raw.get("content") or "").strip(),
                 room_id=raw.get("room_id"),
                 source=raw.get("source"),
+            )
+            logger.info(
+                "[Dispatcher][Kafka] consumed ok topic=%s room_id=%s job_id=%s",
+                POSTS_TOPIC,
+                str(payload.room_id or ""),
+                payload.job_id,
             )
             result = await _dispatch_to_worker(payload)
             out = result.get("result", result)
@@ -149,6 +156,13 @@ async def _kafka_loop() -> None:
                     "message": "Invalid worker response payload",
                 }
             await _kafka_producer.send_and_wait(KAFKA_RESULTS_TOPIC, json.dumps(out).encode("utf-8"))
+            logger.info(
+                "[Dispatcher][Kafka] result publish ok topic=%s room_id=%s job_id=%s status=%s",
+                KAFKA_RESULTS_TOPIC,
+                str(payload.room_id or ""),
+                payload.job_id,
+                str(out.get("status") if isinstance(out, dict) else ""),
+            )
         except Exception as exc:
             err_payload = {
                 "status": "error",
