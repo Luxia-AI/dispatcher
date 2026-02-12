@@ -151,7 +151,6 @@ def get_kafka_config() -> dict:
         "bootstrap_servers": KAFKA_BOOTSTRAP,
         "request_timeout_ms": KAFKA_REQUEST_TIMEOUT_MS,
         "retry_backoff_ms": KAFKA_RETRY_BACKOFF_MS,
-        "retries": KAFKA_RETRIES,
         "connections_max_idle_ms": KAFKA_CONNECTIONS_MAX_IDLE_MS,
     }
 

@@ -296,13 +296,13 @@ def _validate_kafka_runtime_config() -> None:
     cfg = get_kafka_config()
     bootstrap = str(cfg.get("bootstrap_servers", ""))
     request_timeout_ms = int(cfg.get("request_timeout_ms", 0))
-    retries = int(cfg.get("retries", 0))
+    retries = KAFKA_RESULTS_PUBLISH_ATTEMPTS
     retry_backoff_ms = int(cfg.get("retry_backoff_ms", 0))
     security_protocol = str(cfg.get("security_protocol", "PLAINTEXT"))
     using_event_hubs = "servicebus.windows.net" in bootstrap.lower()
 
     logger.info(
-        "[Dispatcher][KafkaConfig] bootstrap=%s security_protocol=%s request_timeout_ms=%d retries=%d retry_backoff_ms=%d",
+        "[Dispatcher][KafkaConfig] bootstrap=%s security_protocol=%s request_timeout_ms=%d publish_attempts=%d retry_backoff_ms=%d",
         bootstrap,
         security_protocol,
         request_timeout_ms,
@@ -324,7 +324,7 @@ def _validate_kafka_runtime_config() -> None:
         )
     if retries < 3:
         logger.warning(
-            "[Dispatcher][KafkaConfig] retries=%d may be too low for transient broker timeouts",
+            "[Dispatcher][KafkaConfig] publish_attempts=%d may be too low for transient broker timeouts",
             retries,
         )
 
@@ -346,19 +346,23 @@ async def startup_kafka() -> None:
             "[Dispatcher][Fallback] callback disabled; set SOCKETHUB_URL or SOCKETHUB_RESULT_CALLBACK_URL for non-Kafka delivery fallback"
         )
     cfg = get_kafka_config()
-    consumer_cfg = dict(cfg)
-    # Producer-only option; AIOKafkaConsumer rejects it.
-    consumer_cfg.pop("retries", None)
     _kafka_consumer = AIOKafkaConsumer(
         POSTS_TOPIC,
         group_id=KAFKA_CONSUMER_GROUP,
         enable_auto_commit=True,
         auto_offset_reset="latest",
-        **consumer_cfg,
+        **cfg,
     )
     _kafka_producer = AIOKafkaProducer(**cfg)
-    await _kafka_consumer.start()
-    await _kafka_producer.start()
+    try:
+        await _kafka_consumer.start()
+        await _kafka_producer.start()
+    except Exception:
+        with contextlib.suppress(Exception):
+            await _kafka_consumer.stop()
+        _kafka_consumer = None
+        _kafka_producer = None
+        raise
     with contextlib.suppress(Exception):
         post_partitions = _kafka_consumer.partitions_for_topic(POSTS_TOPIC)
         logger.info(
