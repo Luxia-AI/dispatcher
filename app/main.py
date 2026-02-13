@@ -19,12 +19,20 @@ SERVICE_VERSION = os.getenv("SERVICE_VERSION", "1.0.0")
 SERVICE_ENV = os.getenv("APP_ENV", "prod")
 WORKER_URL = os.getenv("WORKER_URL", "http://127.0.0.1:8002")
 WORKER_TIMEOUT_SECONDS = float(os.getenv("WORKER_TIMEOUT_SECONDS", "180"))
-WORKER_TIMEOUT_MIN_SECONDS = float(os.getenv("WORKER_TIMEOUT_MIN_SECONDS", "420"))
-WORKER_CONNECT_TIMEOUT_SECONDS = float(os.getenv("WORKER_CONNECT_TIMEOUT_SECONDS", "10"))
+# Keep a high default floor to avoid dispatcher 502 while long web-search jobs are still running.
+WORKER_TIMEOUT_MIN_SECONDS = float(os.getenv("WORKER_TIMEOUT_MIN_SECONDS", "900"))
+WORKER_CONNECT_TIMEOUT_SECONDS = float(
+    os.getenv("WORKER_CONNECT_TIMEOUT_SECONDS", "10")
+)
 WORKER_WRITE_TIMEOUT_SECONDS = float(os.getenv("WORKER_WRITE_TIMEOUT_SECONDS", "30"))
 WORKER_POOL_TIMEOUT_SECONDS = float(os.getenv("WORKER_POOL_TIMEOUT_SECONDS", "30"))
 WORKER_READ_TIMEOUT_SECONDS = max(WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_MIN_SECONDS)
-ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "false").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 KAFKA_RESULTS_TOPIC = os.getenv("RESULTS_TOPIC", "jobs.results")
 KAFKA_CONSUMER_GROUP = os.getenv("DISPATCHER_GROUP", "dispatcher-posts")
 KAFKA_RESULTS_PUBLISH_ATTEMPTS = max(
@@ -36,11 +44,7 @@ KAFKA_RESULTS_PUBLISH_BACKOFF_SECONDS = max(
 SOCKETHUB_BASE_URL = os.getenv("SOCKETHUB_URL", "").strip().rstrip("/")
 SOCKETHUB_RESULT_CALLBACK_URL = os.getenv(
     "SOCKETHUB_RESULT_CALLBACK_URL",
-    (
-        f"{SOCKETHUB_BASE_URL}/internal/dispatch-result"
-        if SOCKETHUB_BASE_URL
-        else ""
-    ),
+    (f"{SOCKETHUB_BASE_URL}/internal/dispatch-result" if SOCKETHUB_BASE_URL else ""),
 ).strip()
 SOCKETHUB_RESULT_CALLBACK_TOKEN = os.getenv(
     "SOCKETHUB_RESULT_CALLBACK_TOKEN", ""
@@ -74,7 +78,9 @@ class DispatchRequest(BaseModel):
 
 
 app = FastAPI(title="Luxia Dispatcher", version=SERVICE_VERSION)
-install_metrics(app, service_name=SERVICE_NAME, version=SERVICE_VERSION, env=SERVICE_ENV)
+install_metrics(
+    app, service_name=SERVICE_NAME, version=SERVICE_VERSION, env=SERVICE_ENV
+)
 logger.info(
     "[Dispatcher] timeouts read=%.1fs(min=%.1fs) connect=%.1fs write=%.1fs pool=%.1fs",
     WORKER_READ_TIMEOUT_SECONDS,
@@ -93,7 +99,11 @@ async def healthz() -> dict[str, str]:
 @app.get("/dispatch/test")
 async def dispatch_test() -> dict[str, object]:
     dispatcher_jobs_dispatched_total.inc()
-    return {"status": "ok", "service": SERVICE_NAME, "message": "dispatch counter incremented"}
+    return {
+        "status": "ok",
+        "service": SERVICE_NAME,
+        "message": "dispatch counter incremented",
+    }
 
 
 @app.post("/dispatch/submit")
@@ -125,7 +135,18 @@ async def _dispatch_to_worker(payload: DispatchRequest) -> dict[str, object]:
                 worker_result = response.json()
     except Exception as exc:
         dispatcher_jobs_failed_total.inc()
-        raise HTTPException(status_code=502, detail=f"Worker call failed: {exc}") from exc
+        logger.exception(
+            "[Dispatcher] Worker dispatch failed job_id=%s room_id=%s timeout(read=%.1fs connect=%.1fs write=%.1fs pool=%.1fs)",
+            payload.job_id,
+            str(payload.room_id or ""),
+            WORKER_READ_TIMEOUT_SECONDS,
+            WORKER_CONNECT_TIMEOUT_SECONDS,
+            WORKER_WRITE_TIMEOUT_SECONDS,
+            WORKER_POOL_TIMEOUT_SECONDS,
+        )
+        raise HTTPException(
+            status_code=502, detail=f"Worker call failed: {exc}"
+        ) from exc
 
     return {
         "status": "ok",
@@ -145,7 +166,11 @@ async def _kafka_loop() -> None:
     if _kafka_consumer is None or _kafka_producer is None:
         logger.warning("[Dispatcher] Kafka loop started without consumer/producer")
         return
-    logger.info("[Dispatcher] Kafka consume loop started topic=%s group=%s", POSTS_TOPIC, KAFKA_CONSUMER_GROUP)
+    logger.info(
+        "[Dispatcher] Kafka consume loop started topic=%s group=%s",
+        POSTS_TOPIC,
+        KAFKA_CONSUMER_GROUP,
+    )
     async for msg in _kafka_consumer:
         raw: dict[str, object] | None = None
         try:
@@ -215,7 +240,9 @@ async def _publish_result_with_retry(
     job_id: object,
 ) -> bool:
     if _kafka_producer is None:
-        logger.warning("[Dispatcher][Kafka] result publish skipped: producer unavailable")
+        logger.warning(
+            "[Dispatcher][Kafka] result publish skipped: producer unavailable"
+        )
         return False
 
     encoded = json.dumps(result_payload).encode("utf-8")
@@ -243,9 +270,7 @@ async def _publish_result_with_retry(
                 exc,
             )
             if attempt < KAFKA_RESULTS_PUBLISH_ATTEMPTS:
-                await asyncio.sleep(
-                    KAFKA_RESULTS_PUBLISH_BACKOFF_SECONDS * attempt
-                )
+                await asyncio.sleep(KAFKA_RESULTS_PUBLISH_BACKOFF_SECONDS * attempt)
     return False
 
 
@@ -388,7 +413,11 @@ async def startup_kafka() -> None:
             exc,
         )
     _kafka_task = asyncio.create_task(_kafka_loop())
-    logger.info("[Dispatcher] Kafka enabled topic_in=%s topic_out=%s", POSTS_TOPIC, KAFKA_RESULTS_TOPIC)
+    logger.info(
+        "[Dispatcher] Kafka enabled topic_in=%s topic_out=%s",
+        POSTS_TOPIC,
+        KAFKA_RESULTS_TOPIC,
+    )
 
 
 @app.on_event("shutdown")
