@@ -74,6 +74,8 @@ class DispatchRequest(BaseModel):
     job_id: str
     claim: str
     room_id: str | None = None
+    client_id: str | None = None
+    client_claim_id: str | None = None
     source: str | None = None
 
 
@@ -128,6 +130,8 @@ async def _dispatch_to_worker(payload: DispatchRequest) -> dict[str, object]:
                         "job_id": payload.job_id,
                         "claim": payload.claim,
                         "room_id": payload.room_id,
+                        "client_id": payload.client_id,
+                        "client_claim_id": payload.client_claim_id,
                         "source": payload.source or SERVICE_NAME,
                     },
                 )
@@ -153,6 +157,8 @@ async def _dispatch_to_worker(payload: DispatchRequest) -> dict[str, object]:
         "service": SERVICE_NAME,
         "job_id": payload.job_id,
         "room_id": payload.room_id,
+        "client_id": payload.client_id,
+        "client_claim_id": payload.client_claim_id,
         "result": worker_result,
     }
 
@@ -179,6 +185,8 @@ async def _kafka_loop() -> None:
                 job_id=str(raw.get("job_id") or str(uuid.uuid4())),
                 claim=str(raw.get("claim") or raw.get("content") or "").strip(),
                 room_id=raw.get("room_id"),
+                client_id=raw.get("client_id"),
+                client_claim_id=raw.get("client_claim_id"),
                 source=raw.get("source"),
             )
             logger.info(
