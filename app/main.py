@@ -177,69 +177,73 @@ async def _kafka_loop() -> None:
         POSTS_TOPIC,
         KAFKA_CONSUMER_GROUP,
     )
-    async for msg in _kafka_consumer:
-        raw: dict[str, object] | None = None
-        try:
-            raw = json.loads(msg.value.decode("utf-8"))
-            payload = DispatchRequest(
-                job_id=str(raw.get("job_id") or str(uuid.uuid4())),
-                claim=str(raw.get("claim") or raw.get("content") or "").strip(),
-                room_id=raw.get("room_id"),
-                client_id=raw.get("client_id"),
-                client_claim_id=raw.get("client_claim_id"),
-                source=raw.get("source"),
-            )
-            logger.info(
-                "[Dispatcher][Kafka] consumed ok topic=%s room_id=%s job_id=%s",
-                POSTS_TOPIC,
-                str(payload.room_id or ""),
-                payload.job_id,
-            )
-            result = await _dispatch_to_worker(payload)
-            out = result.get("result", result)
-            if isinstance(out, dict):
-                out.setdefault("job_id", payload.job_id)
-                out.setdefault("room_id", payload.room_id)
-            else:
-                out = {
-                    "status": "error",
-                    "job_id": payload.job_id,
-                    "room_id": payload.room_id,
-                    "message": "Invalid worker response payload",
-                }
-            published = await _publish_result_with_retry(
-                out, payload.room_id, payload.job_id
-            )
-            if not published:
-                fallback_ok = await _emit_result_fallback(
+    try:
+        async for msg in _kafka_consumer:
+            raw: dict[str, object] | None = None
+            try:
+                raw = json.loads(msg.value.decode("utf-8"))
+                payload = DispatchRequest(
+                    job_id=str(raw.get("job_id") or str(uuid.uuid4())),
+                    claim=str(raw.get("claim") or raw.get("content") or "").strip(),
+                    room_id=raw.get("room_id"),
+                    client_id=raw.get("client_id"),
+                    client_claim_id=raw.get("client_claim_id"),
+                    source=raw.get("source"),
+                )
+                logger.info(
+                    "[Dispatcher][Kafka] consumed ok topic=%s room_id=%s job_id=%s",
+                    POSTS_TOPIC,
+                    str(payload.room_id or ""),
+                    payload.job_id,
+                )
+                result = await _dispatch_to_worker(payload)
+                out = result.get("result", result)
+                if isinstance(out, dict):
+                    out.setdefault("job_id", payload.job_id)
+                    out.setdefault("room_id", payload.room_id)
+                else:
+                    out = {
+                        "status": "error",
+                        "job_id": payload.job_id,
+                        "room_id": payload.room_id,
+                        "message": "Invalid worker response payload",
+                    }
+                published = await _publish_result_with_retry(
                     out, payload.room_id, payload.job_id
                 )
-                if not fallback_ok:
-                    logger.error(
-                        "[Dispatcher] Worker completed but result delivery failed room_id=%s job_id=%s",
-                        str(payload.room_id or ""),
-                        payload.job_id,
+                if not published:
+                    fallback_ok = await _emit_result_fallback(
+                        out, payload.room_id, payload.job_id
                     )
-        except Exception as exc:
-            err_payload = {
-                "status": "error",
-                "job_id": raw.get("job_id") if isinstance(raw, dict) else None,
-                "room_id": raw.get("room_id") if isinstance(raw, dict) else None,
-                "message": f"Kafka dispatch failed: {type(exc).__name__}: {exc}",
-            }
-            if not (
-                await _publish_result_with_retry(
-                    err_payload,
-                    err_payload.get("room_id"),
-                    err_payload.get("job_id"),
-                )
-            ):
-                await _emit_result_fallback(
-                    err_payload,
-                    err_payload.get("room_id"),
-                    err_payload.get("job_id"),
-                )
-            logger.exception("[Dispatcher] Kafka consume/dispatch failure")
+                    if not fallback_ok:
+                        logger.error(
+                            "[Dispatcher] Worker completed but result delivery failed room_id=%s job_id=%s",
+                            str(payload.room_id or ""),
+                            payload.job_id,
+                        )
+            except Exception as exc:
+                err_payload = {
+                    "status": "error",
+                    "job_id": raw.get("job_id") if isinstance(raw, dict) else None,
+                    "room_id": raw.get("room_id") if isinstance(raw, dict) else None,
+                    "message": f"Kafka dispatch failed: {type(exc).__name__}: {exc}",
+                }
+                if not (
+                    await _publish_result_with_retry(
+                        err_payload,
+                        err_payload.get("room_id"),
+                        err_payload.get("job_id"),
+                    )
+                ):
+                    await _emit_result_fallback(
+                        err_payload,
+                        err_payload.get("room_id"),
+                        err_payload.get("job_id"),
+                    )
+                logger.exception("[Dispatcher] Kafka consume/dispatch failure")
+    except asyncio.CancelledError:
+        logger.info("[Dispatcher] Kafka consume loop cancelled during shutdown")
+        raise
 
 
 async def _publish_result_with_retry(
@@ -433,7 +437,7 @@ async def shutdown_kafka() -> None:
     global _kafka_consumer, _kafka_producer, _kafka_task
     if _kafka_task is not None:
         _kafka_task.cancel()
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await _kafka_task
         _kafka_task = None
     if _kafka_consumer is not None:
